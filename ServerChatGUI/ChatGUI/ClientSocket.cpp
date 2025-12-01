@@ -52,14 +52,13 @@ void ClientSocket::Disconnect() {
     isConnected = false;
 
     SOCKET s = sock;
-    sock = INVALID_SOCKET;   // tránh thread access sock sau khi bị close
+    sock = INVALID_SOCKET;   
 
     if (s != INVALID_SOCKET) {
         shutdown(s, SD_BOTH);
         closesocket(s);
     }
 
-    // BẮT BUỘC join SAU khi socket đã close
     if (recvThread.joinable()) {
         recvThread.join();
     }
@@ -74,7 +73,6 @@ bool ClientSocket::RecvAll(char* buf, int len) {
         if (ret < 0) {
             int err = WSAGetLastError();
 
-            // Socket đã bị đóng từ thread khác
             if (err == WSAENOTSOCK) return false;
 
             if (err == WSAEWOULDBLOCK || err == WSAEINTR) {
