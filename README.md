@@ -31,9 +31,9 @@ Dự án được phát triển bằng **C++17**, **WinSock2**, và **MFC** (gia
 
 ## Luồng hoạt động
 
-Client ---> Server : Gửi packet (login, message, request user list)
-Server ---> Client : Trả về packet tương ứng
-Server ---> All Clients : Broadcast tin nhắn mới
+- Client ---> Server : Gửi packet (login, message, request user list)
+- Server ---> Client : Trả về packet tương ứng
+- Server ---> All Clients : Broadcast tin nhắn mới
 
 ## Công nghệ & Thư viện
 - **Ngôn ngữ**: C++17
