@@ -56,7 +56,7 @@ Dự án được phát triển bằng **C++17**, **WinSock2**, và **MFC** (gia
 1. Mở `ServerChatGUI.sln`.
 2. Build → Run nhiều instance để test nhiều user.
 
-## Ảnh minh hoạ (Demo UI)
+## Ảnh minh hoạ 
 <img width="800" alt="Demo UI" src="https://github.com/user-attachments/assets/168465bc-b03b-4ef9-963a-7a0babfd3d7d" />
 
 ## Liên kết
