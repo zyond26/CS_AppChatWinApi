@@ -64,7 +64,6 @@ bool UserManager::RemoveUser(const std::wstring& username) {
     return true;
 }
 
-
 bool UserManager::RemoveUserBySocket(SOCKET socket) {
     std::lock_guard<std::mutex> lock(usersMutex);
 
