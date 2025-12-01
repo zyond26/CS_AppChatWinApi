@@ -60,7 +60,6 @@ BOOL ChatScreen::OnInitDialog() {
     g_socket.SetCallback(GlobalPacketHandler);
     SetCurrentChatScreen(this);
 
-    // Request user list (send only the PacketType as request)
     PacketType req = PACKET_USER_LIST;
     g_socket.Send(&req, sizeof(req));
 
@@ -135,7 +134,6 @@ LRESULT ChatScreen::OnMessageReceived(WPARAM wParam, LPARAM lParam) {
     CString sender(msg->sender);
     CString receiver(msg->receiver);
 
-    // update user list map if needed
     if (m_userIdMap.find(sender) == m_userIdMap.end() && sender != m_username) {
         int idx = list_user.InsertItem(list_user.GetItemCount(), sender);
         m_userIdMap[sender] = msg->senderId;
@@ -169,14 +167,13 @@ LRESULT ChatScreen::OnUpdateUserList(WPARAM wParam, LPARAM lParam) {
         if (packet->users[i].username[0] == L'\0') continue;
         CString username(packet->users[i].username);
         int userId = packet->users[i].userId;
-        if (userId <= 0) continue; // skip invalid ids
+        if (userId <= 0) continue; 
 
         m_userIdMap[username] = userId;
 
         if (username.CompareNoCase(m_username) == 0) {
             m_myUserId = userId;
 
-            // request general history (targetId=0) if you want
             PacketRequestHistory req{};
             req.type = PACKET_REQUEST_HISTORY;
             req.requesterId = m_myUserId;

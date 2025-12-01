@@ -129,7 +129,7 @@ void CServerChatGUIDlg::OnPaint()
 {
 	if (IsIconic())
 	{
-		CPaintDC dc(this); // device context for painting
+		CPaintDC dc(this); 
 
 		SendMessage(WM_ICONERASEBKGND, reinterpret_cast<WPARAM>(dc.GetSafeHdc()), 0);
 
@@ -233,7 +233,7 @@ LRESULT CServerChatGUIDlg::OnLoginFailed(WPARAM wParam, LPARAM lParam)
 		AfxMessageBox(L"Đăng nhập thất bại! Sai tên đăng nhập hoặc mật khẩu.", MB_ICONERROR);
 	}
 
-	if (p) delete p;  // Giải phóng bộ nhớ
+	if (p) delete p;  
 	return 0;
 }
 void CServerChatGUIDlg::OnBnClickedButtonregister()

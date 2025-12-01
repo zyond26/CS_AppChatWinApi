@@ -9,7 +9,6 @@ public:
     virtual BOOL OnInitDialog();
 
     RegisterScreen(CWnd* pParent = nullptr);
-    // Dialog Data
 #ifdef AFX_DESIGN_TIME
     enum { IDD = IDD_DIALOG_Register };
 #endif

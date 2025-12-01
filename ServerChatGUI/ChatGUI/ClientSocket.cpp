@@ -119,7 +119,6 @@ void ClientSocket::StartRecvThread() {
 
             int packetSize = 0;
 
-            // 1) nhận 4 byte prefix
             if (!RecvAll((char*)&packetSize, 4)) {
                 OutputDebugStringA("ClientSocket: lost connection (prefix)\n");
                 break;

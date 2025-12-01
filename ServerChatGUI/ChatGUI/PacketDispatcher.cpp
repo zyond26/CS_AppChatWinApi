@@ -135,7 +135,6 @@ void GlobalPacketHandler(const char* data, int size)
             delete uS;
         break;
     }
-
     default:
         break;
     }

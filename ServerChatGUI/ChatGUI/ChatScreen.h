@@ -19,13 +19,12 @@ public:
 		m_username = username;
 	}
 
-// Dialog Data
 #ifdef AFX_DESIGN_TIME
 	enum { IDD = IDD_DIALOG_ChatScreen };
 #endif
 
 protected:
-	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV support
+	virtual void DoDataExchange(CDataExchange* pDX);    
 
 	DECLARE_MESSAGE_MAP()
 	CListCtrl list_user;
@@ -38,7 +37,7 @@ public:
 	CString m_username;
 	CString selected;
 
-	CString m_currentChatWith;  // Lưu đang chat với ai: L"ALL" hoặc tên user
+	CString m_currentChatWith;  
 
 	virtual BOOL OnInitDialog();
 	afx_msg void OnLvnItemchangedListuser(NMHDR* pNMHDR, LRESULT* pResult);
@@ -53,8 +52,6 @@ public:
 
 	LRESULT OnMessageReceived(WPARAM wParam, LPARAM lParam);
 	void AddMessage(const CString& message);
-	//void SaveMessagesToFile();
-
 public:
 	int m_myUserId = 0;                    
 	int m_currentTargetId = 0;
