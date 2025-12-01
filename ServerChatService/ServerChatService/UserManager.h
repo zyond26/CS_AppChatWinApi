@@ -24,10 +24,12 @@ public:
     static bool RemoveUserBySocket(SOCKET socket);
 
     static SOCKET GetUserSocket(const std::wstring& username);
-    static bool IsUserOnline(const std::wstring& username);
-    static std::map<std::wstring, UserSession> GetOnlineUsers();
-    static int GetOnlineCount();
+    //static bool IsUserOnline(const std::wstring& username);
+    //static std::map<std::wstring, UserSession> GetOnlineUsers();
+    //static int GetOnlineCount();
 
     static bool SendToUser(const std::wstring& username, const char* data, int size);
     static void Broadcast(const char* data, int size, const std::wstring& excludeUser = L"");
+    bool SendAll(SOCKET s, const char* data, int len);
+    bool SendPacket(SOCKET s, const char* data, int len);
 };

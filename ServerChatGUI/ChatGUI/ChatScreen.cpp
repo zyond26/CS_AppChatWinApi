@@ -7,26 +7,22 @@
 #include "Struct.h"
 #include "Global.h"
 #include "PacketDispatcher.h"
-#include <map>
 #include <ctime>
 
 IMPLEMENT_DYNAMIC(ChatScreen, CDialogEx)
 
-ChatScreen::ChatScreen(CWnd* pParent /*=nullptr*/)
-    : CDialogEx(IDD_DIALOG_ChatScreen, pParent), m_myUserId(0), m_currentTargetId(0)
-{
+extern ClientSocket g_socket;
+
+ChatScreen::ChatScreen(CWnd* pParent) : CDialogEx(IDD_DIALOG_ChatScreen, pParent), m_myUserId(0), m_currentTargetId(0) {
+    g_currentChatScreen = this;
     m_currentChatWith = L"";
 }
 
-ChatScreen::~ChatScreen()
-{
-    if (g_currentChatScreen == this) {
-        g_currentChatScreen = nullptr;
-    }
+ChatScreen::~ChatScreen() {
+    g_currentChatScreen = nullptr;
 }
 
-void ChatScreen::DoDataExchange(CDataExchange* pDX)
-{
+void ChatScreen::DoDataExchange(CDataExchange* pDX) {
     CDialogEx::DoDataExchange(pDX);
     DDX_Control(pDX, IDC_LIST_user, list_user);
     DDX_Control(pDX, IDC_LIST_mess, list_mess);
@@ -40,37 +36,38 @@ BEGIN_MESSAGE_MAP(ChatScreen, CDialogEx)
     ON_BN_CLICKED(IDC_BUTTON_send, &ChatScreen::OnBnClickedButtonsend)
     ON_BN_CLICKED(IDC_BUTTON_logout, &ChatScreen::OnBnClickedButtonlogout)
     ON_NOTIFY(LVN_ITEMCHANGED, IDC_LIST_user, &ChatScreen::OnLvnItemchangedListuser)
-    ON_BN_CLICKED(IDC_BUTTON_save,&ChatScreen::OnBnClickedButtonsave)
-    
+    ON_BN_CLICKED(IDC_BUTTON_save, &ChatScreen::OnBnClickedButtonsave)
     ON_MESSAGE(WM_RECV_CHAT, &ChatScreen::OnMessageReceived)
     ON_MESSAGE(WM_UPDATE_USERLIST, &ChatScreen::OnUpdateUserList)
     ON_MESSAGE(WM_UPDATE_USERSTATUS, &ChatScreen::OnUpdateUserStatus)
     ON_MESSAGE(WM_RECV_MESSAGE_HISTORY, &ChatScreen::OnMessageHistoryReceived)
-    
 END_MESSAGE_MAP()
 
-BOOL ChatScreen::OnInitDialog()
-{
+BOOL ChatScreen::OnInitDialog() {
     CDialogEx::OnInitDialog();
 
     CString title;
     title.Format(L"Chat - %s", m_username);
     SetWindowText(title);
 
+    list_user.SetView(LV_VIEW_DETAILS);
     list_user.InsertColumn(0, L"User", LVCFMT_LEFT, 200);
     list_user.SetExtendedStyle(LVS_EX_FULLROWSELECT);
 
-    list_mess.InsertColumn(0, L"Message", LVCFMT_LEFT, 400);
+    list_mess.InsertColumn(0, L"Message", LVCFMT_LEFT, 600);
     list_mess.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
 
     g_socket.SetCallback(GlobalPacketHandler);
     SetCurrentChatScreen(this);
 
+    // Request user list (send only the PacketType as request)
+    PacketType req = PACKET_USER_LIST;
+    g_socket.Send(&req, sizeof(req));
+
     return TRUE;
 }
 
-void ChatScreen::OnBnClickedButtonsend()
-{
+void ChatScreen::OnBnClickedButtonsend() {
     CString text;
     edit_text.GetWindowText(text);
     if (text.IsEmpty()) {
@@ -96,26 +93,18 @@ void ChatScreen::OnBnClickedButtonsend()
     }
 
     g_socket.Send(&msg, sizeof(msg));
-
-    CString line;
-    CTime t(msg.timestamp);
-    line.Format(L"[%s] Bạn → %s: %s", t.Format(L"%H:%M"), m_currentChatWith, msg.message);
-    AddMessage(line);
-
     edit_text.SetWindowText(L"");
 }
-void ChatScreen::AddMessage(const CString& msg)
-{
+
+void ChatScreen::AddMessage(const CString& msg) {
     int idx = list_mess.InsertItem(list_mess.GetItemCount(), msg);
     list_mess.EnsureVisible(idx, FALSE);
 }
 
-void ChatScreen::OnLvnItemchangedListuser(NMHDR* pNMHDR, LRESULT* pResult)
-{
+void ChatScreen::OnLvnItemchangedListuser(NMHDR* pNMHDR, LRESULT* pResult) {
     LPNMLISTVIEW pNMItem = reinterpret_cast<LPNMLISTVIEW>(pNMHDR);
-
     if ((pNMItem->uChanged & LVIF_STATE) && (pNMItem->uNewState & LVIS_SELECTED)) {
-        if (pNMItem->iItem == -1) return;
+        if (pNMItem->iItem == -1) { *pResult = 0; return; }
 
         CString selectedName = list_user.GetItemText(pNMItem->iItem, 0);
         auto it = m_userIdMap.find(selectedName);
@@ -128,64 +117,66 @@ void ChatScreen::OnLvnItemchangedListuser(NMHDR* pNMHDR, LRESULT* pResult)
             PacketRequestHistory req{};
             req.type = PACKET_REQUEST_HISTORY;
             req.requesterId = m_myUserId;
-            req.targetId = m_currentTargetId;  
+            req.targetId = m_currentTargetId;
             g_socket.Send(&req, sizeof(req));
 
             CString title;
-            title.Format(L"Chat - %s → %s", m_username, m_currentChatWith);
+            title.Format(L"Chat - %s -> %s", m_username, m_currentChatWith);
             SetWindowText(title);
         }
     }
     *pResult = 0;
 }
 
- LRESULT ChatScreen::OnMessageReceived(WPARAM wParam, LPARAM lParam)
-{
+LRESULT ChatScreen::OnMessageReceived(WPARAM wParam, LPARAM lParam) {
     auto msg = (PacketMessage*)wParam;
     if (!msg) return 0;
 
-    if (m_userIdMap.find(msg->sender) == m_userIdMap.end()) {
-        int idx = list_user.InsertItem(list_user.GetItemCount(), msg->sender);
-        m_userIdMap[msg->sender] = msg->senderId;
+    CString sender(msg->sender);
+    CString receiver(msg->receiver);
+
+    // update user list map if needed
+    if (m_userIdMap.find(sender) == m_userIdMap.end() && sender != m_username) {
+        int idx = list_user.InsertItem(list_user.GetItemCount(), sender);
+        m_userIdMap[sender] = msg->senderId;
         list_user.SetItemData(idx, msg->senderId);
     }
 
-    CString line;
     CTime t(msg->timestamp);
+    CString line;
 
-    if (wcscmp(msg->sender, m_username) == 0)
-        line.Format(L"[%s] Bạn → %s: %s", t.Format(L"%H:%M"), msg->receiver, msg->message);
+    if (sender.CompareNoCase(m_username) == 0)
+        line.Format(L"[%s] Bạn -> %s: %s", t.Format(L"%H:%M"), receiver, msg->message);
     else
-        line.Format(L"[%s] %s → Bạn: %s", t.Format(L"%H:%M"), msg->sender, msg->message);
+        line.Format(L"[%s] %s -> Bạn: %s", t.Format(L"%H:%M"), sender, msg->message);
 
-    CString chatUser = (wcscmp(msg->sender, m_username) == 0) ? msg->receiver : msg->sender;
+    CString chatUser = (sender.CompareNoCase(m_username) == 0) ? receiver : sender;
 
-    if (chatUser == m_currentChatWith)
-        AddMessage(line);
+    if (chatUser.CompareNoCase(m_currentChatWith) == 0) AddMessage(line);
 
     delete msg;
     return 0;
 }
 
-LRESULT ChatScreen::OnUpdateUserList(WPARAM wParam, LPARAM lParam)
-{
+LRESULT ChatScreen::OnUpdateUserList(WPARAM wParam, LPARAM lParam) {
     auto packet = (PacketUserList*)wParam;
     if (!packet) return 0;
 
-    
-        m_userIdMap.clear();
+    m_userIdMap.clear();
     list_user.DeleteAllItems();
 
     for (int i = 0; i < packet->count && i < MAX_CLIENTS; i++) {
         if (packet->users[i].username[0] == L'\0') continue;
-
-        CString username = packet->users[i].username;
+        CString username(packet->users[i].username);
         int userId = packet->users[i].userId;
+        if (userId <= 0) continue; // skip invalid ids
+
         m_userIdMap[username] = userId;
 
-        if (username == m_username) {
+        if (username.CompareNoCase(m_username) == 0) {
             m_myUserId = userId;
 
+            // request general history (targetId=0) if you want
             PacketRequestHistory req{};
             req.type = PACKET_REQUEST_HISTORY;
             req.requesterId = m_myUserId;
@@ -202,16 +193,15 @@ LRESULT ChatScreen::OnUpdateUserList(WPARAM wParam, LPARAM lParam)
     return 0;
 }
 
-LRESULT ChatScreen::OnUpdateUserStatus(WPARAM wParam, LPARAM lParam)
-{
+LRESULT ChatScreen::OnUpdateUserStatus(WPARAM wParam, LPARAM lParam) {
     auto p = (PacketUserStatus*)wParam;
     if (!p) return 0;
 
-    CString name = p->username;
+    CString name(p->username);
     bool found = false;
 
     for (int i = 0; i < list_user.GetItemCount(); i++) {
-        if (list_user.GetItemText(i, 0) == name) {
+        if (list_user.GetItemText(i, 0).CompareNoCase(name) == 0) {
             found = true;
             if (!p->isOnline) list_user.DeleteItem(i);
             break;
@@ -228,29 +218,31 @@ LRESULT ChatScreen::OnUpdateUserStatus(WPARAM wParam, LPARAM lParam)
     return 0;
 }
 
-LRESULT ChatScreen::OnMessageHistoryReceived(WPARAM wParam, LPARAM lParam)
-{
+LRESULT ChatScreen::OnMessageHistoryReceived(WPARAM wParam, LPARAM lParam) {
     auto packet = (PacketMessageHistory*)wParam;
     if (!packet) return 0;
-    
+
     for (int i = 0; i < packet->count; i++) {
         const MessageHistory& msg = packet->messages[i];
         CTime t(msg.timestamp);
         CString line;
 
-        if (wcscmp(msg.receiver, L"") == 0) {
+        CString sSender(msg.sender);
+        CString sReceiver(msg.receiver);
+
+        if (sReceiver.IsEmpty()) {
             line.Format(L"[%s] %s: %s", t.Format(L"%H:%M"),
-                wcscmp(msg.sender, m_username) == 0 ? L"Bạn" : msg.sender,
+                (sSender.CompareNoCase(m_username) == 0) ? L"Bạn" : sSender,
                 msg.message);
         }
-        else if (wcscmp(msg.sender, m_username) == 0) {
-            line.Format(L"[%s] Bạn → %s: %s", t.Format(L"%H:%M"), msg.receiver, msg.message);
+        else if (sSender.CompareNoCase(m_username) == 0) {
+            line.Format(L"[%s] Bạn -> %s: %s", t.Format(L"%H:%M"), sReceiver, msg.message);
         }
-        else if (wcscmp(msg.receiver, m_username) == 0) {
-            line.Format(L"[%s] %s → Bạn: %s", t.Format(L"%H:%M"), msg.sender, msg.message);
+        else if (sReceiver.CompareNoCase(m_username) == 0) {
+            line.Format(L"[%s] %s -> Bạn: %s", t.Format(L"%H:%M"), sSender, msg.message);
         }
         else {
-            line.Format(L"[%s] %s → %s: %s", t.Format(L"%H:%M"), msg.sender, msg.receiver, msg.message);
+            line.Format(L"[%s] %s -> %s: %s", t.Format(L"%H:%M"), sSender, sReceiver, msg.message);
         }
 
         AddMessage(line);
@@ -258,12 +250,14 @@ LRESULT ChatScreen::OnMessageHistoryReceived(WPARAM wParam, LPARAM lParam)
 
     delete packet;
     return 0;
-    
-
 }
 
-void ChatScreen::OnBnClickedButtonlogout()
-{
+void ChatScreen::OnBnClickedButtonlogout() {
+    PacketLogout out{};
+    out.type = PACKET_LOGOUT;
+    wcscpy_s(out.username, m_username.GetString());
+    g_socket.Send(&out, sizeof(out));
+
     DestroyWindow();
     if (g_hwndMain && ::IsWindow(g_hwndMain))
         ::ShowWindow(g_hwndMain, SW_SHOW);
@@ -273,19 +267,21 @@ void ChatScreen::OnBnClickedButtonsave()
 {
     if (list_mess.GetItemCount() == 0)
     {
-        AfxMessageBox(L"Không có tin nhắn nào để lưu cả!");
+        MessageBox(L"Không có tin nhắn nào để lưu cả!", L"Thông báo", MB_ICONWARNING);
         return;
     }
 
-        if (m_currentChatWith.IsEmpty())
-        {
-            AfxMessageBox(L"Vui lòng chọn người để lưu lịch sử chat!");
-            return;
-        }
+    if (m_currentChatWith.IsEmpty())
+    {
+        MessageBox(L"Vui lòng chọn người để lưu lịch sử chat!", L"Thông báo", MB_ICONWARNING);
+        return;
+    }
 
     CString chatWith = m_currentChatWith;
 
-    CTime now = CTime::GetCurrentTime();
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+
     CString safeName = chatWith;
     safeName.Replace(L"\\", L"_");
     safeName.Replace(L"/", L"_");
@@ -298,50 +294,84 @@ void ChatScreen::OnBnClickedButtonsave()
     safeName.Replace(L"|", L"_");
 
     CString fileName;
-    fileName.Format(L"Chat với %s_%04d-%02d-%02d_%02d-%02d-%02d.txt",
+    fileName.Format(L"Chat_%s_%04d-%02d-%02d_%02d-%02d-%02d.txt",
         safeName,
-        now.GetYear(), now.GetMonth(), now.GetDay(),
-        now.GetHour(), now.GetMinute(), now.GetSecond());
+        st.wYear, st.wMonth, st.wDay,
+        st.wHour, st.wMinute, st.wSecond);
 
-    CFileDialog dlg(FALSE, L"txt", fileName, OFN_OVERWRITEPROMPT | OFN_HIDEREADONLY,
-        L"Text Files (*.txt)|*.txt|All Files (*.*)|*.*||", this);
+    OPENFILENAMEW ofn = { 0 };
+    wchar_t szFile[MAX_PATH] = { 0 };
+    wcscpy_s(szFile, MAX_PATH, fileName);
 
-    if (dlg.DoModal() != IDOK) return;
+    ofn.lStructSize = sizeof(OPENFILENAMEW);
+    ofn.hwndOwner = m_hWnd;
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter = L"Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrDefExt = L"txt";
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_HIDEREADONLY | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
 
-    CString pathName = dlg.GetPathName();
+    if (!GetSaveFileNameW(&ofn))
+        return;
 
-    CFile file;
-    if (!file.Open(pathName, CFile::modeCreate | CFile::modeWrite))
+    HANDLE hFile = CreateFileW(
+        szFile,
+        GENERIC_WRITE,
+        0,
+        NULL,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+
+    if (hFile == INVALID_HANDLE_VALUE)
     {
-        AfxMessageBox(L"Không thể tạo file! Kiểm tra quyền ghi hoặc đường dẫn.");
+        MessageBox(L"Không thể tạo file! Kiểm tra quyền ghi hoặc đường dẫn.", L"Lỗi", MB_ICONERROR);
         return;
     }
 
     WORD bom = 0xFEFF;
-    file.Write(&bom, sizeof(bom));
+    DWORD dwBytesWritten = 0;
+    WriteFile(hFile, &bom, sizeof(bom), &dwBytesWritten, NULL);
 
     CString header;
-    header.Format(L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n"
-        L"     LỊCH SỬ CHAT VỚI %s\r\n"
-        L"     Người dùng: %s\r\n"
-        L"     Thời gian lưu: %s\r\n"
-        L"     Tổng số tin nhắn: %d\r\n"
+    CString timeStr;
+    timeStr.Format(L"%02d/%02d/%04d %02d:%02d:%02d",
+        st.wDay, st.wMonth, st.wYear,
+        st.wHour, st.wMinute, st.wSecond);
+
+    header.Format(
+        L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n"
+        L"   LỊCH SỬ CHAT VỚI %s\r\n"
+        L"   Người dùng: %s\r\n"
+        L"   Thời gian lưu: %s\r\n"
+        L"   Tổng số tin nhắn: %d\r\n"
         L"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\r\n\r\n",
         chatWith,
         m_username,
-        now.Format(L"%d/%m/%Y lúc %H:%M:%S"),
-        list_mess.GetItemCount());
+        timeStr,
+        list_mess.GetItemCount()
+    );
 
-    file.Write(header, header.GetLength() * sizeof(wchar_t));
+    WriteFile(hFile,
+        (LPCVOID)(LPCTSTR)header,
+        header.GetLength() * sizeof(wchar_t),
+        &dwBytesWritten,
+        NULL);
 
     for (int i = 0; i < list_mess.GetItemCount(); i++)
     {
         CString msg = list_mess.GetItemText(i, 0);
         msg += L"\r\n";
-        file.Write(msg, msg.GetLength() * sizeof(wchar_t));
+        WriteFile(hFile,
+            (LPCVOID)(LPCTSTR)msg,
+            msg.GetLength() * sizeof(wchar_t),
+            &dwBytesWritten,
+            NULL);
     }
 
-   
+    CloseHandle(hFile);
 
+    MessageBox(L"Đã lưu lịch sử chat thành công!", L"Thành công", MB_ICONINFORMATION);
 }
-

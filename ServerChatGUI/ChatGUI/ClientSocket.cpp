@@ -1,9 +1,7 @@
 ﻿#include "pch.h"
 #include "ClientSocket.h"
-#include <thread>
 #include <ws2tcpip.h>
-#include "Global.h"
-#include "Struct.h"
+#include <chrono>
 
 ClientSocket::ClientSocket() : sock(INVALID_SOCKET), isConnected(false), running(false), callback(nullptr) {
     static bool wsaInited = false;
@@ -33,7 +31,6 @@ bool ClientSocket::Connect(const char* serverIp, int port) {
     inet_pton(AF_INET, serverIp, &addr.sin_addr);
 
     if (connect(sock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        char msg[128];
         closesocket(sock);
         sock = INVALID_SOCKET;
         return false;
@@ -58,65 +55,101 @@ void ClientSocket::Disconnect() {
         sock = INVALID_SOCKET;
     }
 }
+
+bool ClientSocket::SendAll(const char* data, int size) {
+    int sent = 0;
+    while (sent < size) {
+        int ret = send(sock, data + sent, size - sent, 0);
+        if (ret == SOCKET_ERROR || ret == 0) {
+            return false;
+        }
+        sent += ret;
+    }
+    return true;
+}
+
+bool ClientSocket::SendPacket(const void* data, int size) {
+    if (!isConnected || sock == INVALID_SOCKET) return false;
+    int len = size;
+    if (!SendAll((char*)&len, sizeof(len))) return false;
+    return SendAll((const char*)data, size);
+}
+
 bool ClientSocket::Send(const void* data, int size) {
     if (!isConnected) {
-        OutputDebugStringA("[ClientSocket]  Send failed - not connected\n");
+        OutputDebugStringA("[ClientSocket] Send failed - not connected\n");
         return false;
     }
 
-    int sent = send(sock, (const char*)data, size, 0);
-    if (sent == SOCKET_ERROR) {
+    bool ok = SendPacket(data, size);
+    if (!ok) {
         char debugMsg[128];
         int error = WSAGetLastError();
-        sprintf_s(debugMsg, "[ClientSocket]  Send failed - error: %d\n", error);
+        sprintf_s(debugMsg, "[ClientSocket] SendPacket failed - error: %d\n", error);
         OutputDebugStringA(debugMsg);
-
         Disconnect();
         return false;
     }
 
-    char debugMsg[128];
-    sprintf_s(debugMsg, "[ClientSocket] Sent %d/%d bytes successfully\n", sent, size);
-    OutputDebugStringA(debugMsg);
     return true;
 }
 
-void ClientSocket::StartRecvThread() {
-    recvThread = std::thread([this]() {
-        char buffer[4096];
-        while (running && isConnected && sock != INVALID_SOCKET) {
-            int bytes = recv(sock, buffer, sizeof(buffer), 0);
-            if (bytes > 0) {
-                if (callback) {
-                    char* copy = new char[bytes];
-                    memcpy(copy, buffer, bytes);
-
-                    callback(copy, bytes);  
-                }
+bool ClientSocket::RecvAll(char* buf, int len) {
+    int total = 0;
+    while (total < len) {
+        int ret = recv(sock, buf + total, len - total, 0);
+        if (ret == 0) return false;
+        if (ret < 0) {
+            int err = WSAGetLastError();
+            if (err == WSAEWOULDBLOCK || err == WSAEINTR) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
             }
-            else if (bytes == 0) {
-                OutputDebugStringA("ClientSocket: Server closed connection\n");
+            return false;
+        }
+        total += ret;
+    }
+    return true;
+}
+void ClientSocket::StartRecvThread() {
+
+    recvThread = std::thread([this]() {
+
+        while (running && isConnected) {
+
+            int packetSize = 0;
+
+            // 1) nhận 4 byte prefix
+            if (!RecvAll((char*)&packetSize, 4)) {
+                OutputDebugStringA("ClientSocket: lost connection (prefix)\n");
                 break;
             }
-            else {
-                int err = WSAGetLastError();
-                if (err != WSAEWOULDBLOCK && err != WSAEINTR) {
-                    char msg[128];
-                    sprintf_s(msg, "ClientSocket: recv error %d\n", err);
-                    OutputDebugStringA(msg);
-                    break;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            if (packetSize <= 0 || packetSize > 100000) {
+                OutputDebugStringA("ClientSocket: invalid size -> disconnect\n");
+                break;
             }
+
+            char* data = new char[packetSize];
+            if (!RecvAll(data, packetSize)) {
+                delete[] data;
+                OutputDebugStringA("ClientSocket: lost connection (payload)\n");
+                break;
+            }
+
+            if (callback)
+                callback(data, packetSize);
+
+            delete[] data;
         }
         isConnected = false;
         running = false;
         OutputDebugStringA("ClientSocket: Receive thread stopped\n");
+
         });
 }
+
 void ClientSocket::SetCallback(void(*cb)(const char*, int)) {
     this->callback = cb;
 }
-
-
 

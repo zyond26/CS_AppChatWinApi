@@ -7,9 +7,11 @@
 
 #define SERVICE_NAME L"ServerChatService"
 
-//extern BOOL Running;
 
+extern bool g_ServerRunning;
 bool StartMyService();
 void StopMyService();
+void StartTcpServer();
+void StopTcpServer();
 
 

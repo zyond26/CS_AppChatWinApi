@@ -1,19 +1,23 @@
 ﻿#include "UserManager.h"
-#include <iostream>
-#include<vector>
+#include <map>
+#include <mutex>
+#include <vector>
+#include <string>
+#include <windows.h>
+
+extern bool SendPacket(SOCKET s, const char* data, int len);
 
 std::map<std::wstring, UserSession> UserManager::onlineUsers;
 std::mutex UserManager::usersMutex;
 
-std::vector<std::wstring> UserManager::GetOnlineUsernames() {
-    std::vector<std::wstring> result;
-    std::lock_guard<std::mutex> lock(usersMutex);
-    for (const auto& pair : onlineUsers) {
-        if (pair.second.isOnline)
-            result.push_back(pair.first);
+static std::vector<std::pair<std::wstring, UserSession>> SnapshotOnlineUsers() {
+    std::vector<std::pair<std::wstring, UserSession>> out;
+    std::lock_guard<std::mutex> lock(UserManager::usersMutex);
+    out.reserve(UserManager::onlineUsers.size());
+    for (auto& p : UserManager::onlineUsers) {
+        out.emplace_back(p.first, p.second);
     }
-
-    return result;
+    return out;
 }
 
 bool UserManager::AddUser(const std::wstring& username, SOCKET socket) {
@@ -21,26 +25,28 @@ bool UserManager::AddUser(const std::wstring& username, SOCKET socket) {
 
     auto it = onlineUsers.find(username);
     if (it != onlineUsers.end()) {
-
         it->second.socket = socket;
         it->second.isOnline = true;
 
         char debugMsg[256];
-        sprintf_s(debugMsg, " UserManager: User %ls reconnected (socket updated to %d)\n",
-            username.c_str(), socket);
+        sprintf_s(debugMsg, "UserManager: User %ls reconnected (socket updated = %d)\n",
+            username.c_str(), (int)socket);
         OutputDebugStringA(debugMsg);
         return true;
     }
+
     UserSession session;
-    session.socket = socket;
     session.username = username;
+    session.socket = socket;
     session.isOnline = true;
+
     onlineUsers[username] = session;
 
     char debugMsg[256];
-    sprintf_s(debugMsg, " UserManager: User %ls added (socket %d). Online: %zu users\n",
-        username.c_str(), socket, onlineUsers.size());
+    sprintf_s(debugMsg, "UserManager: User %ls added (socket %d). Total: %zu\n",
+        username.c_str(), (int)socket, onlineUsers.size());
     OutputDebugStringA(debugMsg);
+
     return true;
 }
 
@@ -48,20 +54,26 @@ bool UserManager::RemoveUser(const std::wstring& username) {
     std::lock_guard<std::mutex> lock(usersMutex);
 
     auto it = onlineUsers.find(username);
-    if (it != onlineUsers.end()) {
-        onlineUsers.erase(it);
-
+    if (it == onlineUsers.end()) {
         char debugMsg[256];
-        sprintf_s(debugMsg, " UserManager: User %ls removed. Online: %zu users\n",
-            username.c_str(), onlineUsers.size());
+        sprintf_s(debugMsg, "UserManager: Cannot remove %ls - not found\n", username.c_str());
         OutputDebugStringA(debugMsg);
-        return true;
+        return false;
     }
 
+    SOCKET s = it->second.socket;
+    if (s != INVALID_SOCKET) {
+        shutdown(s, SD_BOTH);
+        closesocket(s);
+    }
+
+    onlineUsers.erase(it);
+
     char debugMsg[256];
-    sprintf_s(debugMsg, " UserManager: User %ls not found for removal\n", username.c_str());
+    sprintf_s(debugMsg, "UserManager: User %ls removed. Remaining: %zu\n",
+        username.c_str(), onlineUsers.size());
     OutputDebugStringA(debugMsg);
-    return false;
+    return true;
 }
 
 bool UserManager::RemoveUserBySocket(SOCKET socket) {
@@ -70,99 +82,95 @@ bool UserManager::RemoveUserBySocket(SOCKET socket) {
     for (auto it = onlineUsers.begin(); it != onlineUsers.end(); ++it) {
         if (it->second.socket == socket) {
             std::wstring username = it->first;
+
+            if (it->second.socket != INVALID_SOCKET) {
+                shutdown(it->second.socket, SD_BOTH);
+                closesocket(it->second.socket);
+            }
+
             onlineUsers.erase(it);
 
             char debugMsg[256];
-            sprintf_s(debugMsg, " UserManager: User %ls removed by socket %d\n",
-                username.c_str(), socket);
+            sprintf_s(debugMsg, "UserManager: User %ls removed by socket %d\n",
+                username.c_str(), (int)socket);
             OutputDebugStringA(debugMsg);
             return true;
         }
     }
+    return false;
 }
 
 SOCKET UserManager::GetUserSocket(const std::wstring& username) {
     std::lock_guard<std::mutex> lock(usersMutex);
     auto it = onlineUsers.find(username);
-    if (it != onlineUsers.end() && it->second.isOnline) {
+    if (it != onlineUsers.end() && it->second.isOnline)
         return it->second.socket;
-    }
     return INVALID_SOCKET;
 }
 
-bool UserManager::IsUserOnline(const std::wstring& username) {
-    std::lock_guard<std::mutex> lock(usersMutex);
-    auto it = onlineUsers.find(username);
-    return (it != onlineUsers.end() && it->second.isOnline);
-}
-
 bool UserManager::SendToUser(const std::wstring& username, const char* data, int size) {
-    SOCKET targetSocket = GetUserSocket(username);
-    if (targetSocket == INVALID_SOCKET) {
-        char debugMsg[256];
-        sprintf_s(debugMsg, "UserManager: Cannot send to %ls - user not online\n", username.c_str());
-        OutputDebugStringA(debugMsg);
-        return false;
+    SOCKET target;
+    {
+        std::lock_guard<std::mutex> lock(usersMutex);
+        auto it = onlineUsers.find(username);
+        if (it == onlineUsers.end() || !it->second.isOnline) {
+            char debugMsg[256];
+            sprintf_s(debugMsg, "UserManager: Cannot send to %ls - not online\n", username.c_str());
+            OutputDebugStringA(debugMsg);
+            return false;
+        }
+        target = it->second.socket;
     }
 
-    int bytesSent = send(targetSocket, data, size, 0);
-    if (bytesSent == SOCKET_ERROR) {
-        int error = WSAGetLastError();
-        char debugMsg[256];
-        sprintf_s(debugMsg, "UserManager: Send to %ls failed - error %d\n", username.c_str(), error);
-        OutputDebugStringA(debugMsg);
-
+    if (!::SendPacket(target, data, size)) {
         RemoveUser(username);
+        char debugMsg[256];
+        sprintf_s(debugMsg, "UserManager: SendPacket to %ls failed -> removed\n", username.c_str());
+        OutputDebugStringA(debugMsg);
         return false;
     }
 
-    char debugMsg[256];
-    sprintf_s(debugMsg, " UserManager: Sent %d bytes to %ls\n", bytesSent, username.c_str());
-    OutputDebugStringA(debugMsg);
     return true;
 }
 
 void UserManager::Broadcast(const char* data, int size, const std::wstring& excludeUser) {
-    std::lock_guard<std::mutex> lock(usersMutex);
-
-    if (onlineUsers.empty()) {
-        return;
+    std::vector<std::pair<std::wstring, UserSession>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(usersMutex);
+        snapshot.reserve(onlineUsers.size());
+        for (const auto& p : onlineUsers) {
+            snapshot.emplace_back(p.first, p.second);
+        }
     }
 
-    int successCount = 0;
-    for (auto& pair : onlineUsers) {
-        if (!pair.second.isOnline || pair.first == excludeUser)
-            continue;
+    int success = 0;
+    for (const auto& pr : snapshot) {
+        const std::wstring& username = pr.first;
+        const UserSession& session = pr.second;
 
-        int bytesSent = send(pair.second.socket, data, size, 0);
-        if (bytesSent == SOCKET_ERROR) {
-            pair.second.isOnline = false;
-            char debugMsg[256];
-            OutputDebugStringA(debugMsg);
+        if (!session.isOnline) continue;
+        if (username == excludeUser) continue;
+
+        if (!::SendPacket(session.socket, data, size)) {
+            RemoveUser(username);
         }
         else {
-            successCount++;
+            success++;
         }
     }
 
     char debugMsg[256];
-    sprintf_s(debugMsg, " UserManager: Broadcast completed - %d/%zu users received\n",
-        successCount, onlineUsers.size());
+    sprintf_s(debugMsg, "UserManager: Broadcast sent to %d/%zu users\n", success, snapshot.size());
     OutputDebugStringA(debugMsg);
 }
 
-std::map<std::wstring, UserSession> UserManager::GetOnlineUsers() {
+std::vector<std::wstring> UserManager::GetOnlineUsernames() {
+    std::vector<std::wstring> ret;
     std::lock_guard<std::mutex> lock(usersMutex);
-    return onlineUsers;
-}
-
-int UserManager::GetOnlineCount() {
-    std::lock_guard<std::mutex> lock(usersMutex);
-    int count = 0;
-    for (const auto& pair : onlineUsers) {
-        if (pair.second.isOnline) count++;
+    for (const auto& p : onlineUsers) {
+        if (p.second.isOnline)
+            ret.push_back(p.first);
     }
-    return count;
+    return ret;
 }
-
 

@@ -7,15 +7,11 @@ bool g_ServerRunning = false;
 
 bool StartMyService() {
     OutputDebugStringA("[SERVICE] StartMyService: Starting server...\n");
-
     g_ServerRunning = true;
-
     std::thread serverThread([]() {
-        StartTcpServer();   
+        StartTcpServer();
         });
-
     serverThread.detach();
-
     OutputDebugStringA("[SERVICE] StartMyService: Server thread started\n");
     return true;
 }

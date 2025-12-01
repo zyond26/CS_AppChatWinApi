@@ -79,7 +79,6 @@ void StopTcpServer() {
         g_server_socket = INVALID_SOCKET;
     }
     
-    // Wait for client threads to finish
     for (auto h : g_clientThreads) {
         WaitForSingleObject(h, 2000);
         CloseHandle(h);

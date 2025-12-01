@@ -6,8 +6,6 @@
 
 #define WM_RECV_CHAT (WM_USER + 100)
 
-// ChatScreen dialog
-
 class ChatScreen : public CDialogEx
 {
 	DECLARE_DYNAMIC(ChatScreen)
@@ -70,3 +68,6 @@ protected:
 public:
 	afx_msg void OnBnClickedButtonsave();
 };
+
+
+

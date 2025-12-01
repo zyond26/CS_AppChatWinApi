@@ -2,6 +2,8 @@
 #pragma once
 #include <time.h>
 
+#pragma pack(push, 1)
+
 #define MAX_NAME                50
 #define MAX_EMAIL               100
 #define MAX_MSG                 512
@@ -111,3 +113,6 @@ struct PacketMessageResult {
     bool success;
     wchar_t msg[100];
 };
+
+#pragma pack(pop)
+

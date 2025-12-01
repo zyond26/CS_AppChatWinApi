@@ -5,9 +5,39 @@
 
 
 sqlite3* Database::db = nullptr;
-//std::recursive_mutex Database::dbMutex;
+std::recursive_mutex Database::dbMutex;
 
-std::recursive_mutex Database::dbMutex;  
+std::wstring HashPassword(const wchar_t* password)
+{
+    HCRYPTPROV hProv = 0;
+    HCRYPTHASH hHash = 0;
+
+    if (!CryptAcquireContextW(&hProv, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT))
+        return L"";
+
+    if (!CryptCreateHash(hProv, CALG_SHA_256, 0, 0, &hHash))
+    {
+        CryptReleaseContext(hProv, 0);
+        return L"";
+    }
+
+    DWORD dataSize = (DWORD)(wcslen(password) * sizeof(wchar_t));
+
+    CryptHashData(hHash, (BYTE*)password, dataSize, 0);
+
+    BYTE hash[32];
+    DWORD hashSize = 32;
+    CryptGetHashParam(hHash, HP_HASHVAL, hash, &hashSize, 0);
+
+    CryptDestroyHash(hHash);
+    CryptReleaseContext(hProv, 0);
+
+    wchar_t hex[65] = {};
+    for (int i = 0; i < (int)hashSize; i++)
+        swprintf(hex + i * 2, 3, L"%02X", hash[i]);
+
+    return std::wstring(hex);
+}
 
 bool Database::Exec16(const wchar_t* sql) {
     std::lock_guard<std::recursive_mutex> lock(dbMutex);
@@ -35,7 +65,7 @@ bool Database::Init() {
     if (lastSlash) *lastSlash = 0;
     strcat_s(path, "\\sqlite333.db");
 
-        char debugMsg[512];
+    char debugMsg[512];
     sprintf_s(debugMsg, " Database path: %s\n", path);
     OutputDebugStringA(debugMsg);
 
@@ -44,7 +74,7 @@ bool Database::Init() {
         OutputDebugStringA(debugMsg);
         return false;
     }
-   
+
     OutputDebugStringA("SQLite opened successfully with UTF-16 support\n");
 
     sqlite3_busy_timeout(db, 3000);
@@ -67,44 +97,49 @@ bool Database::Init() {
         L"FOREIGN KEY(receiver_id) REFERENCES users(id));";
 
     return Exec16(createUsers) && Exec16(createMessages);
-      }
-bool Database::RegisterUser(const wchar_t* username, const wchar_t* email, const wchar_t* password) {
+}
+
+bool Database::RegisterUser(const wchar_t* username, const wchar_t* email, const wchar_t* password)
+{
     std::lock_guard<std::recursive_mutex> lock(dbMutex);
 
     const wchar_t* sql = L"INSERT INTO users(username, email, password) VALUES (?, ?, ?);";
     sqlite3_stmt* stmt = nullptr;
 
-    if (sqlite3_prepare16_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {  
+    if (sqlite3_prepare16_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
         return false;
-    }
-   
+
+    std::wstring hashed = HashPassword(password);
+
     sqlite3_bind_text16(stmt, 1, username, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text16(stmt, 2, email, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text16(stmt, 3, password, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text16(stmt, 3, hashed.c_str(), -1, SQLITE_TRANSIENT);
 
     bool success = (sqlite3_step(stmt) == SQLITE_DONE);
     sqlite3_finalize(stmt);
     return success;
-  }
+}
 
-bool Database::CheckLogin(const wchar_t* username, const wchar_t* password) {
+bool Database::CheckLogin(const wchar_t* username, const wchar_t* password)
+{
     std::lock_guard<std::recursive_mutex> lock(dbMutex);
-    
+
     const wchar_t* sql = L"SELECT id FROM users WHERE username = ? AND password = ? LIMIT 1;";
     sqlite3_stmt* stmt = nullptr;
 
-    if (sqlite3_prepare16_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    if (sqlite3_prepare16_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
         return false;
-    }
+
+    std::wstring hashed = HashPassword(password);
 
     sqlite3_bind_text16(stmt, 1, username, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text16(stmt, 2, password, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text16(stmt, 2, hashed.c_str(), -1, SQLITE_TRANSIENT);
 
     bool exists = (sqlite3_step(stmt) == SQLITE_ROW);
     sqlite3_finalize(stmt);
     return exists;
-    
-   }
+}
+
 int Database::GetUserId(const wchar_t* username)
 {
     std::lock_guard<std::recursive_mutex> lock(dbMutex);
@@ -142,51 +177,6 @@ bool Database::GetUsername(int userId, wchar_t* username, size_t size)
     return found;
 }
 
-
-bool Database::GetMessageHistory(int currentUserId, int targetUserId,
-    MessageHistory* history, int maxCount, int* actualCount)
-{
-    std::lock_guard<std::recursive_mutex> lock(dbMutex);
-    *actualCount = 0;
-
-    sqlite3_stmt* stmt = nullptr;
-        const wchar_t* sql =
-        L"SELECT sender_id, receiver_id, message, timestamp "
-        L"FROM messages "
-        L"WHERE (sender_id = ? AND receiver_id = ?) "
-        L"   OR (sender_id = ? AND receiver_id = ?) "
-        L"ORDER BY timestamp ASC;";
-
-    if (sqlite3_prepare16_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        return false;
-    }
-
-    sqlite3_bind_int(stmt, 1, currentUserId);
-    sqlite3_bind_int(stmt, 2, targetUserId);
-    sqlite3_bind_int(stmt, 3, targetUserId);
-    sqlite3_bind_int(stmt, 4, currentUserId);
-    sqlite3_bind_int(stmt, 5, maxCount);
-
-    int count = 0;
-    while (sqlite3_step(stmt) == SQLITE_ROW && count < maxCount)
-    {
-        const wchar_t* sender = (const wchar_t*)sqlite3_column_text16(stmt, 0);
-        const wchar_t* receiver = (const wchar_t*)sqlite3_column_text16(stmt, 1);
-        const wchar_t* msg = (const wchar_t*)sqlite3_column_text16(stmt, 2);
-        time_t ts = sqlite3_column_int64(stmt, 3);
-
-        wcscpy_s(history[count].sender, sender ? sender : L"Unknown");
-        wcscpy_s(history[count].receiver, receiver ? receiver : L"Private");
-        wcscpy_s(history[count].message, msg ? msg : L"");
-        history[count].timestamp = ts;
-        count++;
-    }
-
-    *actualCount = count;
-    sqlite3_finalize(stmt);
-    return true;
-}
-
 bool Database::SaveMessage(int senderId, int receiverId, const wchar_t* message, time_t timestamp)
 {
     std::lock_guard<std::recursive_mutex> lock(dbMutex);
@@ -205,13 +195,121 @@ bool Database::SaveMessage(int senderId, int receiverId, const wchar_t* message,
     return success;
 }
 
-void Database::Close() {
-    if (db) {
-        sqlite3_close(db);
-        db = nullptr;
-        OutputDebugStringA("Database: Closed\n");
+bool Database::GetFullHistory(MessageHistory* list, int maxCount, int* actual)
+{
+    std::lock_guard<std::recursive_mutex> lock(dbMutex);
+    const wchar_t* sql =
+        L"SELECT sender_id, receiver_id, message, timestamp "
+        L"FROM messages ORDER BY timestamp ASC;";
+
+    sqlite3_stmt* stmt = nullptr;
+    *actual = 0;
+
+    if (sqlite3_prepare16_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
+        return false;
+
+    int count = 0;
+
+    while (sqlite3_step(stmt) == SQLITE_ROW && count < maxCount)
+    {
+        int sid = sqlite3_column_int(stmt, 0);
+        int rid = sqlite3_column_int(stmt, 1);
+        const wchar_t* msg = (const wchar_t*)sqlite3_column_text16(stmt, 2);
+        time_t ts = sqlite3_column_int64(stmt, 3);
+
+        list[count].senderId = sid;
+        list[count].receiverId = rid;
+        wcscpy_s(list[count].message, msg ? msg : L"");
+        list[count].timestamp = ts;
+
+        GetUsername(sid, list[count].sender, MAX_NAME);
+        GetUsername(rid, list[count].receiver, MAX_NAME);
+
+        count++;
     }
+
+    *actual = count;
+    sqlite3_finalize(stmt);
+    return true;
 }
+
+bool Database::GetMessageHistory(int userA, int userB, MessageHistory* list, int maxCount, int* actual)
+{
+    std::lock_guard<std::recursive_mutex> lock(dbMutex);
+
+    const wchar_t* sql =
+        L"SELECT sender_id, receiver_id, message, timestamp "
+        L"FROM messages "
+        L"WHERE (sender_id = ? AND receiver_id = ?) "
+        L"   OR (sender_id = ? AND receiver_id = ?) "
+        L"ORDER BY timestamp ASC;";
+
+    sqlite3_stmt* stmt = nullptr;
+    *actual = 0;
+
+    if (sqlite3_prepare16_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
+        return false;
+
+    sqlite3_bind_int(stmt, 1, userA);
+    sqlite3_bind_int(stmt, 2, userB);
+    sqlite3_bind_int(stmt, 3, userB);
+    sqlite3_bind_int(stmt, 4, userA);
+
+    int count = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && count < maxCount)
+    {
+        list[count].senderId = sqlite3_column_int(stmt, 0);
+        list[count].receiverId = sqlite3_column_int(stmt, 1);
+        const wchar_t* msg = (const wchar_t*)sqlite3_column_text16(stmt, 2);
+        time_t ts = sqlite3_column_int64(stmt, 3);
+
+        wcscpy_s(list[count].message, msg ? msg : L"");
+        list[count].timestamp = ts;
+
+        Database::GetUsername(list[count].senderId, list[count].sender, MAX_NAME);
+        Database::GetUsername(list[count].receiverId, list[count].receiver, MAX_NAME);
+
+        count++;
+    }
+
+    *actual = count;
+    sqlite3_finalize(stmt);
+    return true;
+}
+
+bool Database::GetAllUsers(UserInfo* users, int maxCount, int* actualCount)
+{
+    std::lock_guard<std::recursive_mutex> lock(dbMutex);
+
+    const wchar_t* sql = L"SELECT id, username, email FROM users ORDER BY username ASC;";
+    sqlite3_stmt* stmt = nullptr;
+
+    *actualCount = 0;
+
+    if (sqlite3_prepare16_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
+        return false;
+
+    int count = 0;
+
+    while (sqlite3_step(stmt) == SQLITE_ROW && count < maxCount)
+    {
+        users[count].userId = sqlite3_column_int(stmt, 0);
+
+        const wchar_t* uname = (const wchar_t*)sqlite3_column_text16(stmt, 1);
+        const wchar_t* mail = (const wchar_t*)sqlite3_column_text16(stmt, 2);
+
+        wcscpy_s(users[count].username, uname ? uname : L"");
+        wcscpy_s(users[count].email, mail ? mail : L"");
+        users[count].online = false; 
+
+        count++;
+    }
+
+    *actualCount = count;
+    sqlite3_finalize(stmt);
+    return true;
+}
+
 
 bool Database::UserExists(const wchar_t* username)
 {
@@ -229,4 +327,11 @@ bool Database::UserExists(const wchar_t* username)
     return exists;
 }
 
+void Database::Close() {
+    if (db) {
+        sqlite3_close(db);
+        db = nullptr;
+        OutputDebugStringA("Database: Closed\n");
+    }
+}
 
